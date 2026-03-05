@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { getSupabaseClient } from "@/src/lib/supabaseClient";
@@ -56,8 +56,8 @@ function formatAverage(value: number | null): string {
 }
 
 export default function BarDetailsPage() {
-  const params = useParams<{ id: string }>();
-  const barId = Array.isArray(params.id) ? params.id[0] : params.id;
+  const searchParams = useSearchParams();
+  const barId = searchParams.get("id")?.trim() ?? "";
 
   const [bar, setBar] = useState<BarRow | null>(null);
   const [criteria, setCriteria] = useState<CriterionRow[]>([]);
@@ -100,8 +100,16 @@ export default function BarDetailsPage() {
   const fetchPageData = useCallback(async () => {
     setLoading(true);
     setPageError(null);
+    setBar(null);
+    setCriteria([]);
+    setOverall(null);
+    setAvgByCriteria([]);
 
     try {
+      if (!barId) {
+        throw new Error("Identifiant de bar manquant.");
+      }
+
       const supabase = getSupabaseClient();
       const [barResult, criteriaResult] = await Promise.all([
         supabase
