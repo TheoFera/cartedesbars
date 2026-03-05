@@ -1,34 +1,58 @@
-import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 
-export function middleware(req: NextRequest) {
-  const user = process.env.BASIC_AUTH_USER || "";
-  const pass = process.env.BASIC_AUTH_PASS || "";
+const BASIC_AUTH_HEADER = {
+  "WWW-Authenticate": 'Basic realm="cartedesbars", charset="UTF-8"',
+};
 
-  const auth = req.headers.get("authorization");
-  if (!auth) {
-    return new NextResponse("Auth required", {
-      status: 401,
-      headers: { "WWW-Authenticate": 'Basic realm="Secure Area"' },
-    });
-  }
-
-  const [scheme, encoded] = auth.split(" ");
-  if (scheme !== "Basic" || !encoded) {
-    return new NextResponse("Bad auth", { status: 401 });
-  }
-
-  const decoded = Buffer.from(encoded, "base64").toString("utf8");
-  const [u, p] = decoded.split(":");
-
-  if (u === user && p === pass) return NextResponse.next();
-
+function unauthorized() {
   return new NextResponse("Unauthorized", {
     status: 401,
-    headers: { "WWW-Authenticate": 'Basic realm="Secure Area"' },
+    headers: BASIC_AUTH_HEADER,
   });
 }
 
+function parseAuthorizationHeader(authHeader: string | null) {
+  if (!authHeader) return null;
+
+  const [scheme, encoded] = authHeader.split(" ");
+  if (!scheme || scheme.toLowerCase() !== "basic" || !encoded) return null;
+
+  try {
+    const decoded = atob(encoded);
+    const separatorIndex = decoded.indexOf(":");
+    if (separatorIndex < 0) return null;
+
+    return {
+      username: decoded.slice(0, separatorIndex),
+      password: decoded.slice(separatorIndex + 1),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function middleware(req: NextRequest) {
+  const expectedUser = process.env.BASIC_AUTH_USER;
+  const expectedPass = process.env.BASIC_AUTH_PASS;
+
+  if (!expectedUser || !expectedPass) {
+    return new NextResponse("Basic Auth is not configured.", { status: 500 });
+  }
+
+  const credentials = parseAuthorizationHeader(req.headers.get("authorization"));
+  if (!credentials) return unauthorized();
+
+  if (
+    credentials.username !== expectedUser ||
+    credentials.password !== expectedPass
+  ) {
+    return unauthorized();
+  }
+
+  return NextResponse.next();
+}
+
 export const config = {
-  matcher: ["/((?!_next|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\..*).*)"],
 };
