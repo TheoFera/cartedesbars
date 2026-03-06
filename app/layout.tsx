@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import "leaflet/dist/leaflet.css";
 import "leaflet-defaulticon-compatibility/dist/leaflet-defaulticon-compatibility.css";
+import HideNextDevTools from "@/src/components/HideNextDevTools";
 import PasswordGate from "@/src/components/PasswordGate";
 
 export const metadata: Metadata = {
@@ -17,6 +18,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className="antialiased">
+        <HideNextDevTools />
         <PasswordGate>{children}</PasswordGate>
       </body>
     </html>

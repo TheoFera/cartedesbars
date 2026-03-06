@@ -4,6 +4,11 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 
+import {
+  computeCriteriaStatsForBar,
+  computeOverallByBar,
+  type RawBarNoteStatRow,
+} from "@/src/lib/barNoteStats";
 import { getSupabaseClient } from "@/src/lib/supabaseClient";
 
 type BarRow = {
@@ -20,16 +25,9 @@ type CriterionRow = {
   sort_order: number | null;
 };
 
-type BarOverallRow = {
-  bar_id: string;
-  avg_value: number | string | null;
-  notes_count: number | null;
-};
-
 type BarAvgByCriteriaRow = {
-  bar_id: string;
   criteria_id: string;
-  avg_value: number | string | null;
+  avg_value: number | null;
   notes_count: number | null;
 };
 
@@ -61,7 +59,10 @@ export default function BarDetailsPage() {
 
   const [bar, setBar] = useState<BarRow | null>(null);
   const [criteria, setCriteria] = useState<CriterionRow[]>([]);
-  const [overall, setOverall] = useState<BarOverallRow | null>(null);
+  const [overall, setOverall] = useState<{
+    avg_value: number | null;
+    notes_count: number;
+  } | null>(null);
   const [avgByCriteria, setAvgByCriteria] = useState<BarAvgByCriteriaRow[]>([]);
   const [formState, setFormState] = useState<FormState>({});
   const [loading, setLoading] = useState(true);
@@ -72,29 +73,27 @@ export default function BarDetailsPage() {
 
   const fetchStats = useCallback(async () => {
     const supabase = getSupabaseClient();
+    const { data, error } = await supabase
+      .from("bar_notes")
+      .select("bar_id,criteria_id,value_int,created_at")
+      .eq("bar_id", barId)
+      .order("created_at", { ascending: false });
 
-    const [overallResult, avgByCriteriaResult] = await Promise.all([
-      supabase
-        .from("bar_overall")
-        .select("bar_id,avg_value,notes_count")
-        .eq("bar_id", barId)
-        .maybeSingle(),
-      supabase
-        .from("bar_avg_by_criteria")
-        .select("bar_id,criteria_id,avg_value,notes_count")
-        .eq("bar_id", barId),
-    ]);
-
-    if (overallResult.error) {
-      throw new Error(overallResult.error.message);
+    if (error) {
+      throw new Error(error.message);
     }
 
-    if (avgByCriteriaResult.error) {
-      throw new Error(avgByCriteriaResult.error.message);
-    }
+    const rows = (data as RawBarNoteStatRow[] | null) ?? [];
+    const overallStat = computeOverallByBar(rows).get(barId) ?? {
+      avg: null,
+      count: 0,
+    };
 
-    setOverall(overallResult.data as BarOverallRow | null);
-    setAvgByCriteria((avgByCriteriaResult.data as BarAvgByCriteriaRow[]) ?? []);
+    setOverall({
+      avg_value: overallStat.avg,
+      notes_count: overallStat.count,
+    });
+    setAvgByCriteria(computeCriteriaStatsForBar(rows, barId));
   }, [barId]);
 
   const fetchPageData = useCallback(async () => {
@@ -119,10 +118,10 @@ export default function BarDetailsPage() {
           .maybeSingle(),
         supabase
           .from("criteria")
-          .select("id,name,sort_order")
+          .select("id,name:label,sort_order")
           .eq("is_active", true)
           .order("sort_order", { ascending: true })
-          .order("name", { ascending: true }),
+          .order("label", { ascending: true }),
       ]);
 
       if (barResult.error) throw new Error(barResult.error.message);
