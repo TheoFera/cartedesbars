@@ -556,7 +556,7 @@ function getRatingAppearance(score: number | null): RatingAppearance {
 }
 
 function formatAverage(score: number | null): string {
-  if (score === null) return "Pas encore note";
+  if (score === null) return "Pas encore noté";
   return `${averageFormatter.format(score)}/5`;
 }
 

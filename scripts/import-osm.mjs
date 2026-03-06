@@ -1,4 +1,3 @@
-// scripts/import-osm.mjs
 import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
@@ -18,13 +17,16 @@ for (const envPath of envPaths) {
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const SERVICE_ROLE = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPPORTED_AMENITIES = new Set(["bar", "pub", "cafe", "restaurant"]);
 
 if (!SUPABASE_URL || !SERVICE_ROLE) {
   console.error(
     "Il manque NEXT_PUBLIC_SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY dans .env.local ou env.local"
   );
   if (!loadedEnvPath) {
-    console.error("Aucun fichier .env.local/env.local detecte dans le dossier du projet");
+    console.error(
+      "Aucun fichier .env.local/env.local detecte dans le dossier du projet"
+    );
   }
   process.exit(1);
 }
@@ -47,14 +49,18 @@ function buildAddress(tags = {}) {
 }
 
 function getLatLng(el) {
-  // node => lat/lon
   if (typeof el.lat === "number" && typeof el.lon === "number") {
     return { lat: el.lat, lng: el.lon };
   }
-  // way/relation => center.lat/center.lon (si "out center")
-  if (el.center && typeof el.center.lat === "number" && typeof el.center.lon === "number") {
+
+  if (
+    el.center &&
+    typeof el.center.lat === "number" &&
+    typeof el.center.lon === "number"
+  ) {
     return { lat: el.center.lat, lng: el.center.lon };
   }
+
   return { lat: null, lng: null };
 }
 
@@ -62,7 +68,99 @@ function cleanName(tags = {}) {
   return tags.name || tags["name:fr"] || null;
 }
 
+function normalizeText(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getAddressLine1(address) {
+  const firstPart = String(address || "").split(",")[0] || "";
+  return normalizeText(firstPart);
+}
+
+function buildMatchKey(name, address) {
+  return `${normalizeText(name)}||${getAddressLine1(address)}`;
+}
+
+function buildOsmKey(osmType, osmId) {
+  return `${osmType}||${osmId}`;
+}
+
+async function fetchAllBarsIndex() {
+  const pageSize = 1000;
+  const rows = [];
+
+  for (let from = 0; ; from += pageSize) {
+    const to = from + pageSize - 1;
+    const { data, error } = await supabase
+      .from("bars")
+      .select("id,name,address,osm_type,osm_id")
+      .range(from, to);
+
+    if (error) throw error;
+
+    const page = data || [];
+    rows.push(...page);
+
+    if (page.length < pageSize) break;
+  }
+
+  const byMatchKey = new Map();
+  const byOsmKey = new Map();
+
+  for (const row of rows) {
+    const key = buildMatchKey(row.name, row.address);
+    if (!normalizeText(row.name) || !getAddressLine1(row.address)) continue;
+    if (!byMatchKey.has(key)) {
+      byMatchKey.set(key, row);
+    }
+
+    if (row.osm_type && row.osm_id !== null && row.osm_id !== undefined) {
+      byOsmKey.set(buildOsmKey(row.osm_type, row.osm_id), row);
+    }
+  }
+
+  return { byMatchKey, byOsmKey };
+}
+
+async function updateExistingBatch(rows) {
+  const batchSize = 200;
+  let done = 0;
+
+  for (let i = 0; i < rows.length; i += batchSize) {
+    const batch = rows.slice(i, i + batchSize);
+
+    for (const row of batch) {
+      const { error } = await supabase
+        .from("bars")
+        .update({
+          osm_type: row.osm_type,
+          osm_id: row.osm_id,
+          amenity: row.amenity,
+          name: row.name,
+          address: row.address,
+          lat: row.lat,
+          lng: row.lng,
+          opening_hours_raw: row.opening_hours_raw,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", row.id);
+
+      if (error) throw error;
+    }
+
+    done += batch.length;
+    console.log(`Update: ${done}/${rows.length}`);
+  }
+}
+
 async function upsertBatch(rows) {
+  if (rows.length === 0) return;
+
   const { error } = await supabase
     .from("bars")
     .upsert(rows, { onConflict: "osm_type,osm_id" });
@@ -73,8 +171,12 @@ async function upsertBatch(rows) {
 async function main() {
   const inputFile = process.argv[2];
   if (!inputFile) {
-    console.error("❌ Usage: node scripts/import-osm.mjs <chemin_du_fichier_json>");
-    console.error('   Exemple: node scripts/import-osm.mjs "./paris-bars.json"');
+    console.error(
+      "Usage: node scripts/import-osm.mjs <chemin_du_fichier_json>"
+    );
+    console.error(
+      'Exemple: node scripts/import-osm.mjs "./paris-bars-restaurants.json"'
+    );
     process.exit(1);
   }
 
@@ -82,24 +184,22 @@ async function main() {
   const data = JSON.parse(raw);
 
   if (!data.elements || !Array.isArray(data.elements)) {
-    console.error("❌ JSON invalide: pas de champ elements[]");
+    console.error("JSON invalide: pas de champ elements[]");
     process.exit(1);
   }
 
-  console.log(`✅ Fichier chargé. elements: ${data.elements.length}`);
+  console.log(`Fichier charge. elements: ${data.elements.length}`);
 
   const rows = [];
   for (const el of data.elements) {
     const tags = el.tags || {};
     const amenity = tags.amenity;
 
-    // On ne garde que bar/pub/cafe
-    if (!["bar", "pub", "cafe"].includes(amenity)) continue;
+    if (!SUPPORTED_AMENITIES.has(amenity)) continue;
 
     const name = cleanName(tags);
     const { lat, lng } = getLatLng(el);
 
-    // Si pas de coordonnées, on saute
     if (lat === null || lng === null) continue;
 
     rows.push({
@@ -111,7 +211,6 @@ async function main() {
       lat,
       lng,
       opening_hours_raw: tags.opening_hours || null,
-      // Champs optionnels déjà dans ta table bars (si présents)
       nearest_metro: null,
       area_notes: null,
       manager_name: null,
@@ -119,23 +218,85 @@ async function main() {
     });
   }
 
-  console.log(`✅ Lieux filtrés (bar/pub/cafe) avec coordonnées: ${rows.length}`);
+  const uniqueRowsByOsmKey = new Map();
+  for (const row of rows) {
+    uniqueRowsByOsmKey.set(buildOsmKey(row.osm_type, row.osm_id), row);
+  }
+  const dedupedRows = Array.from(uniqueRowsByOsmKey.values());
 
-  // Insert par paquets (évite les erreurs de taille)
+  console.log(
+    `Lieux filtres (${Array.from(SUPPORTED_AMENITIES).join("/")}) avec coordonnees: ${dedupedRows.length}`
+  );
+
+  const existingBarsIndex = await fetchAllBarsIndex();
+  const rowsToUpdateById = new Map();
+  const rowsToUpsertByOsmKey = new Map();
+  let skippedBecauseConflict = 0;
+
+  for (const row of dedupedRows) {
+    const osmKey = buildOsmKey(row.osm_type, row.osm_id);
+    const matchKey = buildMatchKey(row.name, row.address);
+    const existingByOsmKey = existingBarsIndex.byOsmKey.get(osmKey);
+    const existingByMatchKey = existingBarsIndex.byMatchKey.get(matchKey);
+
+    if (existingByOsmKey) {
+      rowsToUpdateById.set(existingByOsmKey.id, {
+        id: existingByOsmKey.id,
+        ...row,
+      });
+      continue;
+    }
+
+    if (existingByMatchKey) {
+      if (
+        existingByMatchKey.osm_type &&
+        existingByMatchKey.osm_id !== null &&
+        existingByMatchKey.osm_id !== undefined
+      ) {
+        skippedBecauseConflict += 1;
+        continue;
+      }
+
+      rowsToUpdateById.set(existingByMatchKey.id, {
+        id: existingByMatchKey.id,
+        ...row,
+      });
+      existingBarsIndex.byOsmKey.set(osmKey, {
+        ...existingByMatchKey,
+        osm_type: row.osm_type,
+        osm_id: row.osm_id,
+      });
+      continue;
+    }
+
+    rowsToUpsertByOsmKey.set(osmKey, row);
+  }
+
+  const rowsToUpdate = Array.from(rowsToUpdateById.values());
+  const rowsToUpsert = Array.from(rowsToUpsertByOsmKey.values());
+
+  console.log(`Lignes fusionnees avec des lieux existants: ${rowsToUpdate.length}`);
+  console.log(`Lignes a upsert par OSM: ${rowsToUpsert.length}`);
+  console.log(`Lignes ignorees pour conflit OSM deja mappe: ${skippedBecauseConflict}`);
+
+  if (rowsToUpdate.length > 0) {
+    await updateExistingBatch(rowsToUpdate);
+  }
+
   const BATCH_SIZE = 500;
   let done = 0;
 
-  for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const batch = rows.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < rowsToUpsert.length; i += BATCH_SIZE) {
+    const batch = rowsToUpsert.slice(i, i + BATCH_SIZE);
     await upsertBatch(batch);
     done += batch.length;
-    console.log(`➡️ Import: ${done}/${rows.length}`);
+    console.log(`Import: ${done}/${rowsToUpsert.length}`);
   }
 
-  console.log("🎉 Import terminé.");
+  console.log("Import termine.");
 }
 
-main().catch((e) => {
-  console.error("❌ Erreur import:", e);
+main().catch((error) => {
+  console.error("Erreur import:", error);
   process.exit(1);
 });
