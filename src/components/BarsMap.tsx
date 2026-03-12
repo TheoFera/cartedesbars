@@ -1448,7 +1448,7 @@ export default function BarsMap() {
           ) : null}
         </div>
 
-        <div className="pointer-events-auto absolute bottom-24 left-3 right-auto sm:bottom-4 sm:left-4">
+        <div className="pointer-events-auto absolute bottom-4 left-3 right-auto sm:left-4">
           <div className="rounded-md border border-slate-300 bg-white/95 p-2 shadow-lg backdrop-blur">
             <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-700">
               <input
