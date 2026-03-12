@@ -1359,7 +1359,7 @@ export default function BarsMap() {
   }, [debouncedSearchQuery]);
 
   return (
-    <section className="relative h-screen w-full bg-slate-200">
+    <section className="app-viewport-height relative w-full bg-slate-200">
       <MapCanvas
         markerItems={deferredMarkerItems}
         selectedBar={selectedBar}

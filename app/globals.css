@@ -31,6 +31,12 @@ body {
   height: 100%;
 }
 
+.app-viewport-height {
+  height: 100vh;
+  height: 100svh;
+  height: 100dvh;
+}
+
 [data-nextjs-dev-tools-button] {
   display: none !important;
 }
