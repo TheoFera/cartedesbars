@@ -794,6 +794,7 @@ export default function BarsMap() {
   const [isSearching, setIsSearching] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [showOnlyRatedBars, setShowOnlyRatedBars] = useState(false);
 
   const [flyToTarget, setFlyToTarget] = useState<FlyToTarget>(null);
 
@@ -818,8 +819,18 @@ export default function BarsMap() {
   const visibleBars = useMemo(() => {
     if (!viewport) return [];
     const tightenedBounds = expandBounds(viewport.bounds, 0.002, 0.003);
-    return bars.filter((bar) => isInBounds(bar, tightenedBounds));
-  }, [bars, viewport]);
+    return bars.filter((bar) => {
+      if (!isInBounds(bar, tightenedBounds)) {
+        return false;
+      }
+
+      if (showOnlyRatedBars && bar.overallAverage === null) {
+        return false;
+      }
+
+      return true;
+    });
+  }, [bars, showOnlyRatedBars, viewport]);
 
   const markerItems = useMemo(() => {
     if (!viewport) return [];
@@ -1396,6 +1407,22 @@ export default function BarsMap() {
               Erreur criteres: {criteriaError}
             </p>
           ) : null}
+        </div>
+
+        <div className="pointer-events-auto absolute bottom-24 right-3 sm:bottom-8 sm:right-4">
+          <div className="rounded-md border border-slate-300 bg-white/95 p-2 shadow-lg backdrop-blur">
+            <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-700">
+              <input
+                type="checkbox"
+                checked={showOnlyRatedBars}
+                onChange={(event) => {
+                  setShowOnlyRatedBars(event.target.checked);
+                }}
+                className="h-4 w-4 rounded border-slate-300 text-slate-900 focus:ring-slate-500"
+              />
+              Afficher seulement les bars évalués
+            </label>
+          </div>
         </div>
       </div>
 
