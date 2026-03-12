@@ -515,6 +515,16 @@ function normalizeComment(value: string | null | undefined): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function isSameNoteValue(
+  previous: NoteValue | undefined,
+  next: { valueInt: number | null; comment: string | null }
+): boolean {
+  return (
+    (previous?.valueInt ?? null) === next.valueInt &&
+    (previous?.comment ?? null) === next.comment
+  );
+}
+
 function getRatingAppearance(score: number | null): RatingAppearance {
   if (score === null) {
     return {
@@ -526,7 +536,7 @@ function getRatingAppearance(score: number | null): RatingAppearance {
     };
   }
 
-  if (score > 3.5) {
+  if (score >= 4) {
     return {
       markerFill: "#22c55e",
       markerStroke: "#15803d",
@@ -536,7 +546,7 @@ function getRatingAppearance(score: number | null): RatingAppearance {
     };
   }
 
-  if (score >= 2.5) {
+  if (score >= 3) {
     return {
       markerFill: "#f97316",
       markerStroke: "#c2410c",
@@ -1088,7 +1098,7 @@ export default function BarsMap() {
   const handleSave = useCallback(async () => {
     if (!selectedBar) return;
 
-    const payload = criteria
+    const changedEntries = criteria
       .map((criterion) => {
         const current = editForm[criterion.id] ?? { valueInt: "", comment: "" };
         const parsedValue =
@@ -1098,8 +1108,10 @@ export default function BarsMap() {
             ? parsedValue
             : null;
         const comment = normalizeComment(current.comment);
+        const previous = notesByBar[selectedBar.id]?.[criterion.id];
+        const nextValue = { valueInt, comment };
 
-        if (valueInt === null && comment === null) {
+        if (isSameNoteValue(previous, nextValue)) {
           return null;
         }
 
@@ -1121,12 +1133,24 @@ export default function BarsMap() {
         } => entry !== null
       );
 
-    if (payload.length === 0) {
-      setSaveError(
-        "Renseigne au moins une note ou un commentaire avant d'enregistrer."
-      );
+    if (changedEntries.length === 0) {
+      setSaveSuccess("Aucune modification a enregistrer.");
+      setSaveError(null);
       return;
     }
+
+    const payload = changedEntries.filter(
+      (
+        entry
+      ): entry is {
+        bar_id: string;
+        criteria_id: string;
+        value_int: number | null;
+        comment: string | null;
+      } => entry.value_int !== null || entry.comment !== null
+    );
+
+    const changedCriteriaIds = changedEntries.map((entry) => entry.criteria_id);
 
     setIsSaving(true);
     setSaveError(null);
@@ -1134,10 +1158,24 @@ export default function BarsMap() {
 
     try {
       const supabase = getSupabaseClient();
-      const { error } = await supabase.from("bar_notes").insert(payload);
+      const { error: deleteError } = await supabase
+        .from("bar_notes")
+        .delete()
+        .eq("bar_id", selectedBar.id)
+        .in("criteria_id", changedCriteriaIds);
 
-      if (error) {
-        throw new Error(error.message);
+      if (deleteError) {
+        throw new Error(deleteError.message);
+      }
+
+      if (payload.length > 0) {
+        const { error: insertError } = await supabase
+          .from("bar_notes")
+          .insert(payload);
+
+        if (insertError) {
+          throw new Error(insertError.message);
+        }
       }
 
       setSaveSuccess("Modifications enregistrees.");
@@ -1158,6 +1196,7 @@ export default function BarsMap() {
     criteria,
     editForm,
     fetchBarNotes,
+    notesByBar,
     refreshSingleBarOverall,
     selectedBar,
   ]);
@@ -1409,7 +1448,7 @@ export default function BarsMap() {
           ) : null}
         </div>
 
-        <div className="pointer-events-auto absolute bottom-24 right-3 sm:bottom-8 sm:right-4">
+        <div className="pointer-events-auto absolute bottom-24 right-3 sm:bottom-4 sm:left-4 sm:right-auto">
           <div className="rounded-md border border-slate-300 bg-white/95 p-2 shadow-lg backdrop-blur">
             <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-slate-700">
               <input

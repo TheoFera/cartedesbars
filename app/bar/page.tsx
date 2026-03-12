@@ -234,8 +234,18 @@ export default function BarDetailsPage() {
 
     try {
       const supabase = getSupabaseClient();
-      const { error } = await supabase.from("bar_notes").insert(payload);
-      if (error) throw new Error(error.message);
+      const criteriaIds = payload.map((entry) => entry.criteria_id);
+      const { error: deleteError } = await supabase
+        .from("bar_notes")
+        .delete()
+        .eq("bar_id", barId)
+        .in("criteria_id", criteriaIds);
+      if (deleteError) throw new Error(deleteError.message);
+
+      const { error: insertError } = await supabase
+        .from("bar_notes")
+        .insert(payload);
+      if (insertError) throw new Error(insertError.message);
 
       setSubmitSuccess("Notes enregistrees.");
       setFormState((previous) => {
