@@ -58,6 +58,14 @@ type RawMapBarRow = RawBarRow & {
   overall_avg: number | string | null;
 };
 
+type RawRatedBarsInitialBoundsRow = {
+  south: number | string | null;
+  west: number | string | null;
+  north: number | string | null;
+  east: number | string | null;
+  rated_bars_count: number | string | null;
+};
+
 type CriterionRow = {
   id: string;
   name: string;
@@ -136,6 +144,11 @@ const PARIS_BOUNDS: [[number, number], [number, number]] = [
   [48.815, 2.224],
   [48.902, 2.469],
 ];
+
+const INITIAL_RATED_BARS_BOUNDS_PADDING = {
+  lat: 0.006,
+  lng: 0.009,
+};
 
 const PAGE_SIZE = 1000;
 const SEARCH_LIMIT = 8;
@@ -264,6 +277,7 @@ const MarkerLayer = memo(function MarkerLayer({
 });
 
 const MapCanvas = memo(function MapCanvas({
+  initialBounds,
   markerItems,
   selectedBar,
   popupNonce,
@@ -278,6 +292,7 @@ const MapCanvas = memo(function MapCanvas({
   onOpenEdit,
   onClosePopup,
 }: {
+  initialBounds: [[number, number], [number, number]];
   markerItems: MarkerItem[];
   selectedBar: MapBar | null;
   popupNonce: number;
@@ -300,7 +315,7 @@ const MapCanvas = memo(function MapCanvas({
 
   return (
     <MapContainerUnsafe
-      bounds={PARIS_BOUNDS}
+      bounds={initialBounds}
       className="h-full w-full"
       preferCanvas
       zoomControl={false}
@@ -626,6 +641,13 @@ function expandBounds(
   };
 }
 
+function toLeafletBounds(bounds: MapBounds): [[number, number], [number, number]] {
+  return [
+    [bounds.south, bounds.west],
+    [bounds.north, bounds.east],
+  ];
+}
+
 function makeBoundsKey(bounds: MapBounds): string {
   return [
     bounds.south.toFixed(2),
@@ -773,6 +795,9 @@ function FlyToController({ target }: { target: FlyToTarget }) {
 
 export default function BarsMap() {
   const [bars, setBars] = useState<MapBar[]>([]);
+  const [initialMapBounds, setInitialMapBounds] = useState<
+    [[number, number], [number, number]] | null
+  >(null);
   const [viewport, setViewport] = useState<MapViewport | null>(null);
   const [isLoadingBars, setIsLoadingBars] = useState(true);
   const [barsError, setBarsError] = useState<string | null>(null);
@@ -895,6 +920,47 @@ export default function BarsMap() {
         bar.id === barId ? { ...bar, overallAverage: avg } : bar
       )
     );
+  }, []);
+
+  const fetchInitialMapBounds = useCallback(async () => {
+    try {
+      const supabase = getSupabaseClient();
+      const { data, error } = await supabase
+        .from("rated_bars_initial_bounds")
+        .select("south,west,north,east,rated_bars_count")
+        .maybeSingle();
+
+      if (error) {
+        throw new Error(error.message);
+      }
+
+      const row = data as RawRatedBarsInitialBoundsRow | null;
+      const ratedBarsCount = toNumberOrNull(row?.rated_bars_count ?? null) ?? 0;
+      const south = toNumberOrNull(row?.south ?? null);
+      const west = toNumberOrNull(row?.west ?? null);
+      const north = toNumberOrNull(row?.north ?? null);
+      const east = toNumberOrNull(row?.east ?? null);
+
+      if (
+        ratedBarsCount < 1 ||
+        south === null ||
+        west === null ||
+        north === null ||
+        east === null
+      ) {
+        return PARIS_BOUNDS;
+      }
+
+      return toLeafletBounds(
+        expandBounds(
+          { south, west, north, east },
+          INITIAL_RATED_BARS_BOUNDS_PADDING.lat,
+          INITIAL_RATED_BARS_BOUNDS_PADDING.lng
+        )
+      );
+    } catch {
+      return PARIS_BOUNDS;
+    }
   }, []);
 
   const loadBarsForBounds = useCallback(
@@ -1281,6 +1347,23 @@ export default function BarsMap() {
   );
 
   useEffect(() => {
+    let cancelled = false;
+
+    async function loadInitialMapBounds() {
+      const nextBounds = await fetchInitialMapBounds();
+      if (!cancelled) {
+        setInitialMapBounds(nextBounds);
+      }
+    }
+
+    void loadInitialMapBounds();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchInitialMapBounds]);
+
+  useEffect(() => {
     void fetchCriteria();
   }, [fetchCriteria]);
 
@@ -1358,9 +1441,18 @@ export default function BarsMap() {
     };
   }, [debouncedSearchQuery]);
 
+  if (!initialMapBounds) {
+    return (
+      <section className="app-viewport-height flex w-full items-center justify-center bg-slate-100 text-slate-500">
+        Chargement de la carte...
+      </section>
+    );
+  }
+
   return (
     <section className="app-viewport-height relative w-full bg-slate-200">
       <MapCanvas
+        initialBounds={initialMapBounds}
         markerItems={deferredMarkerItems}
         selectedBar={selectedBar}
         popupNonce={popupState.openNonce}
